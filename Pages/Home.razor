@@ -1,0 +1,350 @@
+@page "/"
+@using ExcelDoctor.Models
+@using ExcelDoctor.Services
+@inject ExcelWorkbookAnalyzer Analyzer
+
+<PageTitle>Excel 健康診断</PageTitle>
+
+<section class="diagnostics-shell @(result is null ? "initial" : "has-result")">
+    <div class="workspace-title">
+        <div>
+            <p class="eyebrow">Excel Doctor</p>
+            <h1>Excel 健康診断</h1>
+            <p class="lead-copy">シート構造、数式、外部リンク、入力ルール、保護設定、VBA の痕跡から、保守性・属人化・セキュリティリスクを診断します。解析はブラウザ上で処理され、ファイル内容はサーバーや外部 API へ送信されないため安全です。</p>
+        </div>
+    </div>
+
+    <div class="upload-panel @(isAnalyzing ? "is-analyzing" : string.Empty)" aria-busy="@isAnalyzing">
+        <div class="upload-copy">
+            <span class="upload-icon">XL</span>
+            <div>
+                <label class="upload-label" for="excelFile">Excel ファイルを選択またはドロップ</label>
+                <p>.xlsx / .xlsm 対応。最大 50MB。</p>
+            </div>
+        </div>
+        <InputFile id="excelFile" class="@FileInputClass()" OnChange="AnalyzeFileAsync" accept=".xlsx,.xlsm" />
+
+        @if (isAnalyzing)
+        {
+            <div class="analysis-status" role="status">
+                <span class="scan-dot" aria-hidden="true"></span>
+                <div>
+                    <strong>解析中</strong>
+                    <p>シート構造、数式、外部リンク、VBA 痕跡を確認しています</p>
+                </div>
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            <p class="status error">@errorMessage</p>
+        }
+    </div>
+
+    @if (result is not null)
+    {
+        <section class="result-brief" aria-live="polite">
+            <div>
+                <span class="brief-label">診断結果</span>
+                <h2>@AssessmentTitle(result)</h2>
+                <p>@AssessmentSummary(result)</p>
+            </div>
+            <div class="brief-meta">
+                <span>@result.FileName</span>
+                <strong>@FormatBytes(result.FileSizeBytes)</strong>
+            </div>
+        </section>
+
+        <section class="dashboard-grid" aria-live="polite">
+            <div class="score-panel">
+                <div class="score-ring" style="@ScoreRingStyle(result.HealthScore)">
+                    <span>@result.HealthScore</span>
+                </div>
+                <div>
+                    <p class="score-label">健康診断スコア</p>
+                    <h2>ランク @result.Rank</h2>
+                    <p class="score-comment">@ScoreComment(result.HealthScore)</p>
+                    <div class="rank-scale" aria-label="ランク基準">
+                        @foreach (var rank in RankScale())
+                        {
+                            <span class="@(rank.Rank == result.Rank ? "active" : string.Empty)">@rank.Rank</span>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="risk-panel">
+                <h2>リスク分布</h2>
+                @foreach (var item in RiskBars(result))
+                {
+                    <div class="risk-row">
+                        <span>@item.Label</span>
+                        <div class="risk-track">
+                            <div class="risk-fill" style="width: @item.Percent%"></div>
+                        </div>
+                        <strong>@item.Percent</strong>
+                    </div>
+                }
+                <p class="risk-note">値が高いほど、棚卸し・仕様化・分離の優先度が高い領域です。</p>
+            </div>
+        </section>
+
+        <section class="summary-strip">
+            <div>
+                <span>検出リスク</span>
+                <strong>@result.Findings.Count</strong>
+            </div>
+            <div>
+                <span>高リスク</span>
+                <strong>@result.Findings.Count(finding => finding.Severity == "High")</strong>
+            </div>
+            <div>
+                <span>マクロ</span>
+                <strong>@(result.Vba.HasMacro ? "あり" : "なし")</strong>
+            </div>
+            <div>
+                <span>外部依存</span>
+                <strong>@(result.Logic.ExternalLinkCount + result.Vba.DataAccessKeywordCount)</strong>
+            </div>
+        </section>
+
+        <section class="metric-section">
+            <h2>診断メトリクス</h2>
+            <div class="metric-grid">
+                <MetricCard Label="総シート数" Value="@result.Structure.TotalSheetCount.ToString()" Note="構造規模" />
+                <MetricCard Label="非表示シート数" Value="@result.Structure.HiddenSheetCount.ToString()" Note="属人化" Tone="@MetricTone(result.Structure.HiddenSheetCount)" />
+                <MetricCard Label="ピボットテーブル" Value="@result.Structure.PivotTableCount.ToString()" Note="集計依存" />
+                <MetricCard Label="総数式数" Value="@result.Logic.TotalFormulaCount.ToString()" Note="保守負荷" Tone="@MetricTone(result.Logic.TotalFormulaCount, 300, 1000)" />
+                <MetricCard Label="参照関数" Value="@result.Logic.LookupFunctionCount.ToString()" Note="参照複雑度" Tone="@MetricTone(result.Logic.LookupFunctionCount, 50, 100)" />
+                <MetricCard Label="揮発性関数" Value="@result.Logic.VolatileFunctionCount.ToString()" Note="再計算負荷" Tone="@MetricTone(result.Logic.VolatileFunctionCount)" />
+                <MetricCard Label="外部リンク" Value="@result.Logic.ExternalLinkCount.ToString()" Note="環境依存" Tone="@MetricTone(result.Logic.ExternalLinkCount)" />
+                <MetricCard Label="名前定義" Value="@result.Logic.DefinedNameCount.ToString()" Note="隠れた参照" Tone="@MetricTone(result.Logic.DefinedNameCount, 20, 50)" />
+                <MetricCard Label="セル結合" Value="@result.Operation.MergedCellCount.ToString()" Note="自動化難度" Tone="@MetricTone(result.Operation.MergedCellCount, 20, 50)" />
+                <MetricCard Label="条件付き書式" Value="@result.Operation.ConditionalFormatRuleCount.ToString()" Note="表示ロジック" Tone="@MetricTone(result.Operation.ConditionalFormatRuleCount, 50, 100)" />
+                <MetricCard Label="入力規則" Value="@result.Operation.DataValidationCount.ToString()" Note="入力制御" Tone="@MetricTone(result.Operation.DataValidationCount, 50, 100)" />
+                <MetricCard Label="保護シート" Value="@result.Operation.ProtectedSheetCount.ToString()" Note="編集制限" Tone="@MetricTone(result.Operation.ProtectedSheetCount)" />
+            </div>
+        </section>
+
+        <section class="insight-grid">
+            <div class="panel">
+                <h2>検出されたリスク</h2>
+                @if (result.Findings.Count == 0)
+                {
+                    <p class="muted">大きなリスクは検出されませんでした。</p>
+                }
+                else
+                {
+                    <div class="finding-list">
+                        @foreach (var finding in result.Findings)
+                        {
+                            <article class="finding-card @SeverityClass(finding.Severity)">
+                                <div>
+                                    <span>@finding.Category</span>
+                                    <em>@SeverityLabel(finding.Severity)</em>
+                                </div>
+                                <div>
+                                    <strong>@finding.Title</strong>
+                                </div>
+                                <p>@finding.Detail</p>
+                            </article>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="panel">
+                <h2>次に取るべきアクション</h2>
+                <ol class="action-list">
+                    @foreach (var action in result.RecommendedActions)
+                    {
+                        <li>@action</li>
+                    }
+                </ol>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h2>VBA マクロ診断</h2>
+            <p class="panel-intro">現段階では vbaProject.bin のバイナリ痕跡検索です。次段階の圧縮ストリーム解析で、モジュール単位・行単位の精度に拡張できます。</p>
+            <div class="metric-grid compact">
+                <MetricCard Label="マクロ" Value="@(result.Vba.HasMacro ? "あり" : "なし")" Note="xlsm 判定" Tone="@(result.Vba.HasMacro ? "warn" : string.Empty)" />
+                <MetricCard Label="VBA 保護痕跡" Value="@(result.Vba.IsPasswordProtected ? "あり" : "なし")" Note="可視性" Tone="@(result.Vba.IsPasswordProtected ? "danger" : string.Empty)" />
+                <MetricCard Label="注意語句" Value="@result.Vba.SuspiciousKeywordCount.ToString()" Note="自動実行等" Tone="@MetricTone(result.Vba.SuspiciousKeywordCount)" />
+                <MetricCard Label="外部依存語句" Value="@result.Vba.DataAccessKeywordCount.ToString()" Note="DB/API/Office" Tone="@MetricTone(result.Vba.DataAccessKeywordCount)" />
+                <MetricCard Label="固定情報パターン" Value="@result.Vba.PersonalInfoPatternCount.ToString()" Note="URL/UNC/メール" Tone="@MetricTone(result.Vba.PersonalInfoPatternCount)" />
+            </div>
+
+            @if (result.Vba.HasMacro && (result.Vba.DetectedKeywords.Count > 0 || result.Vba.DetectedDependencies.Count > 0))
+            {
+                <h3 class="tag-heading">検出語句</h3>
+                <div class="tag-cloud">
+                    @foreach (var keyword in result.Vba.DetectedKeywords.Concat(result.Vba.DetectedDependencies).Distinct())
+                    {
+                        <span>@keyword</span>
+                    }
+                </div>
+            }
+
+            @if (result.Vba.DetectedConnectionHints.Count > 0)
+            {
+                <h3 class="tag-heading">接続先ヒント</h3>
+                <div class="tag-cloud">
+                    @foreach (var hint in result.Vba.DetectedConnectionHints)
+                    {
+                        <span>@hint</span>
+                    }
+                </div>
+            }
+
+            @if (result.Vba.DetectedSqlTables.Count > 0)
+            {
+                <h3 class="tag-heading">SQL テーブル候補</h3>
+                <div class="tag-cloud">
+                    @foreach (var table in result.Vba.DetectedSqlTables)
+                    {
+                        <span>@table</span>
+                    }
+                </div>
+            }
+            else if (!result.Vba.HasMacro)
+            {
+                <p class="muted panel-note">このブックには VBA マクロは含まれていません。</p>
+            }
+        </section>
+    }
+</section>
+
+@code {
+    private ExcelDiagnosticsResult? result;
+    private bool isAnalyzing;
+    private string? errorMessage;
+
+    private async Task AnalyzeFileAsync(InputFileChangeEventArgs args)
+    {
+        result = null;
+        errorMessage = null;
+        isAnalyzing = true;
+        await InvokeAsync(StateHasChanged);
+        await Task.Yield();
+
+        try
+        {
+            result = await Analyzer.AnalyzeAsync(args.File);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            isAnalyzing = false;
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        var megabytes = bytes / 1024d / 1024d;
+        return $"{megabytes:N2} MB";
+    }
+
+    private string FileInputClass() => isAnalyzing ? "file-input disabled" : "file-input";
+
+    private static string ScoreRingStyle(int score)
+    {
+        var color = score switch
+        {
+            >= 85 => "#17803a",
+            >= 70 => "#2563eb",
+            >= 55 => "#b7791f",
+            >= 40 => "#c2410c",
+            _ => "#b42318"
+        };
+
+        return $"background: conic-gradient({color} {score}%, #e5e7eb 0);";
+    }
+
+    private static string ScoreComment(int score) => score switch
+    {
+        >= 85 => "大きなリスクは少なく、管理しやすい状態です。",
+        >= 70 => "一部に見直し余地がありますが、致命的な複雑化は限定的です。",
+        >= 55 => "属人化や保守負荷が見え始めています。棚卸しを推奨します。",
+        >= 40 => "業務依存や保守性のリスクが高く、改善計画が必要です。",
+        _ => "ブラックボックス化が強く、早急なリファクタリング対象です。"
+    };
+
+    private static string AssessmentTitle(ExcelDiagnosticsResult result)
+    {
+        var highCount = result.Findings.Count(finding => finding.Severity == "High");
+
+        if (highCount >= 3)
+        {
+            return "優先的な棚卸しが必要な Excel です";
+        }
+
+        if (result.Vba.HasMacro || result.Logic.ExternalLinkCount > 0)
+        {
+            return "外部依存とマクロ観点の確認が必要です";
+        }
+
+        if (result.HealthScore >= 85)
+        {
+            return "管理しやすい状態を保っています";
+        }
+
+        return "保守性と属人化の見直し余地があります";
+    }
+
+    private static string AssessmentSummary(ExcelDiagnosticsResult result)
+    {
+        var highCount = result.Findings.Count(finding => finding.Severity == "High");
+        return $"検出リスク {result.Findings.Count} 件、高リスク {highCount} 件。総数式 {result.Logic.TotalFormulaCount:N0} 件、外部依存 {result.Logic.ExternalLinkCount + result.Vba.DataAccessKeywordCount:N0} 件を確認しました。";
+    }
+
+    private static IEnumerable<(string Label, int Percent)> RiskBars(ExcelDiagnosticsResult result)
+    {
+        yield return ("セキュリティ", ClampPercent(result.Vba.SuspiciousKeywordCount * 25 + (result.Vba.HasMacro ? 20 : 0)));
+        yield return ("属人化", ClampPercent(result.Structure.HiddenSheetCount * 18 + result.Operation.ProtectedSheetCount * 15 + result.Vba.PersonalInfoPatternCount * 20));
+        yield return ("保守性", ClampPercent(result.Logic.TotalFormulaCount / 20 + result.Logic.LookupFunctionCount / 4 + result.Operation.MergedCellCount / 6));
+        yield return ("業務依存", ClampPercent(result.Logic.ExternalLinkCount * 30 + result.Vba.DataAccessKeywordCount * 18));
+    }
+
+    private static int ClampPercent(int value) => Math.Clamp(value, 0, 100);
+
+    private static IEnumerable<(string Rank, string Label)> RankScale()
+    {
+        yield return ("A", "85-100");
+        yield return ("B", "70-84");
+        yield return ("C", "55-69");
+        yield return ("D", "40-54");
+        yield return ("E", "0-39");
+    }
+
+    private static string MetricTone(int value, int warnAt = 1, int dangerAt = 5)
+    {
+        if (value >= dangerAt)
+        {
+            return "danger";
+        }
+
+        if (value >= warnAt)
+        {
+            return "warn";
+        }
+
+        return string.Empty;
+    }
+
+    private static string SeverityClass(string severity) => severity switch
+    {
+        "High" => "severity-high",
+        "Medium" => "severity-medium",
+        _ => "severity-low"
+    };
+
+    private static string SeverityLabel(string severity) => severity switch
+    {
+        "High" => "高",
+        "Medium" => "中",
+        _ => "低"
+    };
+}
