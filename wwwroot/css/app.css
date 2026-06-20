@@ -47,6 +47,42 @@ h1:focus {
     line-height: 1.15;
 }
 
+.product-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    color: #111827;
+    font-weight: 760;
+    font-size: 1.1rem;
+}
+
+.brand-mark {
+    display: grid;
+    width: 36px;
+    height: 36px;
+    place-items: center;
+    border-radius: 8px;
+    background: #000000;
+    overflow: hidden;
+}
+
+    .brand-mark img {
+        display: block;
+        width: 30px;
+        height: 30px;
+        object-fit: contain;
+    }
+
+/*.product-brand img {
+    display: block;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: #050505;
+    object-fit: contain;
+}*/
+
 .lead-copy {
     max-width: 680px;
     margin-bottom: 0;
@@ -261,6 +297,31 @@ h1:focus {
 .brief-meta strong {
     color: #fff;
     font-size: 1.35rem;
+}
+
+.report-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.report-actions button {
+    border: 1px solid #64748b;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 800;
+}
+
+.report-actions button:hover,
+.report-actions button:focus-visible {
+    border-color: #fff;
+    background: rgba(255, 255, 255, 0.12);
 }
 
 .dashboard-grid {
@@ -772,6 +833,10 @@ h1:focus {
     .brief-meta {
         min-width: 0;
         text-align: left;
+    }
+
+    .report-actions {
+        justify-content: flex-start;
     }
 
     .dashboard-grid,

@@ -2,15 +2,21 @@
 @using ExcelDoctor.Models
 @using ExcelDoctor.Services
 @inject ExcelWorkbookAnalyzer Analyzer
+@inject IJSRuntime JsRuntime
 
-<PageTitle>Excel 健康診断</PageTitle>
+<PageTitle>ClavisFlow | Excel 健康診断</PageTitle>
 
 <section class="diagnostics-shell @(result is null ? "initial" : "has-result")">
     <div class="workspace-title">
         <div>
-            <p class="eyebrow">Excel Doctor</p>
+            <div class="product-brand">
+                <span class="brand-mark" aria-hidden="true"><img src="clavisflow-icon.png" alt=""></span>
+                <span>ClavisFlow</span>
+            </div>
             <h1>Excel 健康診断</h1>
-            <p class="lead-copy">ファイルをドラッグ＆ドロップするだけ。危険なマクロ、増殖した数式、隠されたシート、依存しているデータベースをブラウザ上で瞬時に解析。機密性を保ったまま、あなたのExcelの「カオス度」を可視化します。</p>
+            <p class="lead-copy">
+                ファイルをドラッグ＆ドロップするだけ。危険なマクロ、増殖した数式、隠されたシート、依存しているデータベースをブラウザ上で瞬時に解析。機密性を保ったまま、あなたのExcelの「カオス度」を可視化します。
+            </p>
         </div>
     </div>
 
@@ -20,6 +26,7 @@
             <div>
                 <label class="upload-label" for="excelFile">Excel ファイルを選択またはドロップ</label>
                 <p>.xlsx / .xlsm 対応。最大 50MB。</p>
+                <p>ファイルはサーバーに送信されず、すべての解析をブラウザ上で安全に行います。</p>
             </div>
         </div>
         <InputFile id="excelFile" class="@FileInputClass()" OnChange="AnalyzeFileAsync" accept=".xlsx,.xlsm" />
@@ -51,6 +58,9 @@
             <div class="brief-meta">
                 <span>@result.FileName</span>
                 <strong>@FormatBytes(result.FileSizeBytes)</strong>
+                <div class="report-actions">
+                    <button type="button" @onclick="DownloadHtmlReportAsync">HTMLダウンロード</button>
+                </div>
             </div>
         </section>
 
@@ -321,6 +331,16 @@
         }
     }
 
+    private async Task DownloadHtmlReportAsync()
+    {
+        if (result is null)
+        {
+            return;
+        }
+
+        await JsRuntime.InvokeVoidAsync("excelDoctorReport.downloadHtmlReport", BuildReportData(result));
+    }
+
     private static string FormatBytes(long bytes)
     {
         var megabytes = bytes / 1024d / 1024d;
@@ -328,6 +348,80 @@
     }
 
     private string FileInputClass() => isAnalyzing ? "file-input disabled" : "file-input";
+
+    private static object BuildReportData(ExcelDiagnosticsResult result)
+    {
+        return new
+        {
+            generatedAt = DateTimeOffset.Now.ToString("yyyy/MM/dd HH:mm"),
+            fileName = result.FileName,
+            fileSize = FormatBytes(result.FileSizeBytes),
+            healthScore = result.HealthScore,
+            rank = result.Rank,
+            assessmentTitle = AssessmentTitle(result),
+            assessmentSummary = AssessmentSummary(result),
+            scoreComment = ScoreComment(result.HealthScore),
+            riskBars = RiskBars(result).Select(item => new { label = item.Label, percent = item.Percent }),
+            summary = new
+            {
+                findingCount = result.Findings.Count,
+                highFindingCount = result.Findings.Count(finding => finding.Severity == "High"),
+                hasMacro = result.Vba.HasMacro ? "あり" : "なし",
+                externalDependencyCount = result.Logic.ExternalLinkCount + result.Vba.DataAccessKeywordCount
+            },
+            metrics = BuildReportMetrics(result),
+            findings = result.Findings.Select(finding => new
+            {
+                finding.Category,
+                severity = SeverityLabel(finding.Severity),
+                finding.Title,
+                finding.Detail
+            }),
+            actions = result.RecommendedActions,
+            vba = new
+            {
+                hasMacro = result.Vba.HasMacro,
+                note = VbaAnalysisNote(result.Vba),
+                mode = VbaAnalysisModeLabel(result.Vba),
+                result.Vba.ModuleCount,
+                result.Vba.SourceLineCount,
+                result.Vba.SuspiciousKeywordCount,
+                result.Vba.DataAccessKeywordCount,
+                result.Vba.PersonalInfoPatternCount,
+                result.Vba.DetectedObjectTargets,
+                result.Vba.DetectedFileTargets,
+                result.Vba.DetectedConnectionHints,
+                result.Vba.DetectedSqlTables,
+                modules = result.Vba.Modules
+                    .OrderByDescending(ModuleRiskScore)
+                    .ThenBy(module => module.Name)
+                    .Take(12)
+                    .Select(module => new
+                    {
+                        module.Name,
+                        module.LineCount,
+                        summary = ModuleSummary(module),
+                        details = ModuleDetails(module)
+                    })
+            }
+        };
+    }
+
+    private static IEnumerable<object> BuildReportMetrics(ExcelDiagnosticsResult result)
+    {
+        yield return new { label = "総シート数", value = result.Structure.TotalSheetCount.ToString() };
+        yield return new { label = "非表示シート数", value = result.Structure.HiddenSheetCount.ToString() };
+        yield return new { label = "ピボットテーブル", value = result.Structure.PivotTableCount.ToString() };
+        yield return new { label = "総数式数", value = result.Logic.TotalFormulaCount.ToString() };
+        yield return new { label = "参照関数", value = result.Logic.LookupFunctionCount.ToString() };
+        yield return new { label = "揮発性関数", value = result.Logic.VolatileFunctionCount.ToString() };
+        yield return new { label = "外部リンク", value = result.Logic.ExternalLinkCount.ToString() };
+        yield return new { label = "名前定義", value = result.Logic.DefinedNameCount.ToString() };
+        yield return new { label = "セル結合", value = result.Operation.MergedCellCount.ToString() };
+        yield return new { label = "条件付き書式", value = result.Operation.ConditionalFormatRuleCount.ToString() };
+        yield return new { label = "入力規則", value = result.Operation.DataValidationCount.ToString() };
+        yield return new { label = "保護シート", value = result.Operation.ProtectedSheetCount.ToString() };
+    }
 
     private static string ScoreRingStyle(int score)
     {
