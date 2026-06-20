@@ -34,12 +34,32 @@ public sealed record WorkbookOperationMetrics(
 
 public sealed record VbaDiagnostics(
     bool HasMacro,
+    bool DetailedAnalysisCompleted,
     bool IsPasswordProtected,
+    bool SourceCodeParsed,
+    int ModuleCount,
+    int SourceLineCount,
     int SuspiciousKeywordCount,
     int DataAccessKeywordCount,
     int PersonalInfoPatternCount,
     IReadOnlyList<string> DetectedKeywords,
     IReadOnlyList<string> DetectedDependencies,
+    IReadOnlyList<string> DetectedObjectTargets,
+    IReadOnlyList<string> DetectedFileTargets,
+    IReadOnlyList<string> DetectedConnectionHints,
+    IReadOnlyList<string> DetectedSqlTables,
+    IReadOnlyList<VbaModuleDiagnostics> Modules);
+
+public sealed record VbaModuleDiagnostics(
+    string Name,
+    int LineCount,
+    int SuspiciousKeywordCount,
+    int DataAccessKeywordCount,
+    int PersonalInfoPatternCount,
+    IReadOnlyList<string> DetectedKeywords,
+    IReadOnlyList<string> DetectedDependencies,
+    IReadOnlyList<string> DetectedObjectTargets,
+    IReadOnlyList<string> DetectedFileTargets,
     IReadOnlyList<string> DetectedConnectionHints,
     IReadOnlyList<string> DetectedSqlTables);
 

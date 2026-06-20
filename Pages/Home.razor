@@ -164,10 +164,21 @@
         </section>
 
         <section class="panel">
-            <h2>VBA マクロ診断</h2>
-            <p class="panel-intro">現段階では vbaProject.bin のバイナリ痕跡検索です。次段階の圧縮ストリーム解析で、モジュール単位・行単位の精度に拡張できます。</p>
+            <div class="panel-heading">
+                <h2>VBA マクロ診断</h2>
+                @if (result.Vba.HasMacro)
+                {
+                    <button class="secondary-button" type="button" @onclick="AnalyzeVbaDetailsAsync" disabled="@isAnalyzingVba">
+                        @(isAnalyzingVba ? "VBA 解析中..." : result.Vba.DetailedAnalysisCompleted ? "VBA 詳細解析を再実行" : "VBA 詳細解析を実行")
+                    </button>
+                }
+            </div>
+            <p class="panel-intro">@VbaAnalysisNote(result.Vba)</p>
             <div class="metric-grid compact">
                 <MetricCard Label="マクロ" Value="@(result.Vba.HasMacro ? "あり" : "なし")" Note="xlsm 判定" Tone="@(result.Vba.HasMacro ? "warn" : string.Empty)" />
+                <MetricCard Label="解析方式" Value="@VbaAnalysisModeLabel(result.Vba)" Note="VBA 展開" Tone="@(result.Vba.HasMacro && !result.Vba.DetailedAnalysisCompleted ? "warn" : string.Empty)" />
+                <MetricCard Label="モジュール" Value="@result.Vba.ModuleCount.ToString()" Note="VBA 部品数" Tone="@MetricTone(result.Vba.ModuleCount, 8, 20)" />
+                <MetricCard Label="VBA 行数" Value="@result.Vba.SourceLineCount.ToString()" Note="展開できた行数" Tone="@MetricTone(result.Vba.SourceLineCount, 300, 1000)" />
                 <MetricCard Label="VBA 保護痕跡" Value="@(result.Vba.IsPasswordProtected ? "あり" : "なし")" Note="可視性" Tone="@(result.Vba.IsPasswordProtected ? "danger" : string.Empty)" />
                 <MetricCard Label="注意語句" Value="@result.Vba.SuspiciousKeywordCount.ToString()" Note="自動実行等" Tone="@MetricTone(result.Vba.SuspiciousKeywordCount)" />
                 <MetricCard Label="外部依存語句" Value="@result.Vba.DataAccessKeywordCount.ToString()" Note="DB/API/Office" Tone="@MetricTone(result.Vba.DataAccessKeywordCount)" />
@@ -185,6 +196,28 @@
                 </div>
             }
 
+            @if (result.Vba.DetectedObjectTargets.Count > 0)
+            {
+                <h3 class="tag-heading">CreateObject / GetObject の対象</h3>
+                <ul class="evidence-list">
+                    @foreach (var target in result.Vba.DetectedObjectTargets)
+                    {
+                        <li>@target</li>
+                    }
+                </ul>
+            }
+
+            @if (result.Vba.DetectedFileTargets.Count > 0)
+            {
+                <h3 class="tag-heading">対象ファイル・パス候補</h3>
+                <ul class="evidence-list">
+                    @foreach (var path in result.Vba.DetectedFileTargets)
+                    {
+                        <li>@path</li>
+                    }
+                </ul>
+            }
+
             @if (result.Vba.DetectedConnectionHints.Count > 0)
             {
                 <h3 class="tag-heading">接続先ヒント</h3>
@@ -199,16 +232,33 @@
             @if (result.Vba.DetectedSqlTables.Count > 0)
             {
                 <h3 class="tag-heading">SQL テーブル候補</h3>
-                <div class="tag-cloud">
+                <ul class="evidence-list">
                     @foreach (var table in result.Vba.DetectedSqlTables)
                     {
-                        <span>@table</span>
+                        <li>@table</li>
+                    }
+                </ul>
+            }
+
+            @if (result.Vba.Modules.Count > 0)
+            {
+                <h3 class="tag-heading">モジュール別リスク</h3>
+                <div class="vba-module-list">
+                    @foreach (var module in result.Vba.Modules.OrderByDescending(ModuleRiskScore).ThenBy(module => module.Name).Take(12))
+                    {
+                        <article class="vba-module-card">
+                            <div>
+                                <strong>@module.Name</strong>
+                                <span>@module.LineCount 行</span>
+                            </div>
+                            <p>@ModuleSummary(module)</p>
+                            @if (module.DetectedKeywords.Count > 0 || module.DetectedDependencies.Count > 0 || module.DetectedSqlTables.Count > 0)
+                            {
+                                <small>@ModuleDetails(module)</small>
+                            }
+                        </article>
                     }
                 </div>
-            }
-            else if (!result.Vba.HasMacro)
-            {
-                <p class="muted panel-note">このブックには VBA マクロは含まれていません。</p>
             }
         </section>
     }
@@ -216,13 +266,16 @@
 
 @code {
     private ExcelDiagnosticsResult? result;
+    private IBrowserFile? selectedFile;
     private bool isAnalyzing;
+    private bool isAnalyzingVba;
     private string? errorMessage;
 
     private async Task AnalyzeFileAsync(InputFileChangeEventArgs args)
     {
         result = null;
         errorMessage = null;
+        selectedFile = args.File;
         isAnalyzing = true;
         await InvokeAsync(StateHasChanged);
         await Task.Yield();
@@ -238,6 +291,33 @@
         finally
         {
             isAnalyzing = false;
+        }
+    }
+
+    private async Task AnalyzeVbaDetailsAsync()
+    {
+        if (selectedFile is null)
+        {
+            errorMessage = "VBA 詳細解析を実行するには、もう一度 Excel ファイルを選択してください。";
+            return;
+        }
+
+        errorMessage = null;
+        isAnalyzingVba = true;
+        await InvokeAsync(StateHasChanged);
+        await Task.Yield();
+
+        try
+        {
+            result = await Analyzer.AnalyzeAsync(selectedFile, includeVbaDetails: true);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            isAnalyzingVba = false;
         }
     }
 
@@ -347,4 +427,68 @@
         "Medium" => "中",
         _ => "低"
     };
+
+    private static string VbaAnalysisNote(VbaDiagnostics vba)
+    {
+        if (!vba.HasMacro)
+        {
+            return "このブックには VBA マクロは含まれていません。";
+        }
+
+        if (!vba.DetailedAnalysisCompleted)
+        {
+            return "初回診断ではマクロ有無と保護痕跡のみを確認しています。CreateObject の対象、参照ファイル、SQL テーブル候補を調べるには VBA 詳細解析を実行してください。";
+        }
+
+        if (vba.SourceCodeParsed)
+        {
+            return "VBA 圧縮ストリームを展開し、モジュール単位でソースコード上の注意語句と外部依存を解析しています。";
+        }
+
+        return "VBA ソースの展開はできなかったため、vbaProject.bin のバイナリ痕跡から注意語句と外部依存を推定しています。";
+    }
+
+    private static string VbaAnalysisModeLabel(VbaDiagnostics vba)
+    {
+        if (!vba.HasMacro)
+        {
+            return "なし";
+        }
+
+        if (!vba.DetailedAnalysisCompleted)
+        {
+            return "未実行";
+        }
+
+        return vba.SourceCodeParsed ? "ソース" : "痕跡";
+    }
+
+    private static int ModuleRiskScore(VbaModuleDiagnostics module) =>
+        module.SuspiciousKeywordCount * 4 +
+        module.DataAccessKeywordCount * 3 +
+        module.PersonalInfoPatternCount * 2 +
+        module.DetectedSqlTables.Count;
+
+    private static string ModuleSummary(VbaModuleDiagnostics module)
+    {
+        if (ModuleRiskScore(module) == 0)
+        {
+            return "目立つ注意語句は検出されませんでした。";
+        }
+
+        return $"注意語句 {module.SuspiciousKeywordCount} 件、外部依存語句 {module.DataAccessKeywordCount} 件、固定情報パターン {module.PersonalInfoPatternCount} 件を検出しました。";
+    }
+
+    private static string ModuleDetails(VbaModuleDiagnostics module)
+    {
+        var items = module.DetectedKeywords
+            .Concat(module.DetectedDependencies)
+            .Concat(module.DetectedObjectTargets.Select(target => $"Object:{target}"))
+            .Concat(module.DetectedFileTargets.Select(path => $"File:{path}"))
+            .Concat(module.DetectedSqlTables.Select(table => $"SQL:{table}"))
+            .Distinct()
+            .Take(12);
+
+        return $"検出内容: {string.Join(", ", items)}";
+    }
 }

@@ -429,7 +429,7 @@ h1:focus {
 }
 
 .metric-grid.compact {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .metric-card {
@@ -571,6 +571,39 @@ h1:focus {
     margin-top: 22px;
 }
 
+.panel-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.panel-heading h2 {
+    margin-bottom: 0;
+}
+
+.secondary-button {
+    border: 1px solid #2563eb;
+    border-radius: 8px;
+    padding: 9px 13px;
+    background: #fff;
+    color: #1d4ed8;
+    cursor: pointer;
+    font-weight: 800;
+}
+
+.secondary-button:hover:not(:disabled),
+.secondary-button:focus-visible:not(:disabled) {
+    background: #eff6ff;
+}
+
+.secondary-button:disabled {
+    border-color: #cbd5e1;
+    color: #94a3b8;
+    cursor: wait;
+}
+
 .panel-intro {
     max-width: 860px;
     margin: -4px 0 16px;
@@ -605,6 +638,69 @@ h1:focus {
     margin: 18px 0 0;
     color: #334155;
     font-size: 0.92rem;
+}
+
+.evidence-list {
+    display: grid;
+    gap: 6px;
+    margin: 8px 0 0;
+    padding-left: 1.2rem;
+}
+
+.evidence-list li {
+    color: #334155;
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
+
+.evidence-list li::marker {
+    color: #2563eb;
+}
+
+.vba-module-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.vba-module-card {
+    border: 1px solid #d9e0ea;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #f8fafc;
+}
+
+.vba-module-card div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.vba-module-card strong {
+    overflow: hidden;
+    color: #172033;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vba-module-card span,
+.vba-module-card small {
+    color: #64748b;
+    font-size: 0.82rem;
+}
+
+.vba-module-card p {
+    margin-bottom: 6px;
+    color: #475569;
+    font-size: 0.9rem;
+}
+
+.vba-module-card small {
+    display: block;
+    line-height: 1.5;
 }
 
 #blazor-error-ui {
@@ -666,6 +762,7 @@ h1:focus {
     .workspace-title,
     .upload-panel,
     .result-brief,
+    .panel-heading,
     .score-panel {
         align-items: stretch;
         grid-template-columns: 1fr;
@@ -678,7 +775,8 @@ h1:focus {
     }
 
     .dashboard-grid,
-    .insight-grid {
+    .insight-grid,
+    .vba-module-list {
         grid-template-columns: 1fr;
     }
 

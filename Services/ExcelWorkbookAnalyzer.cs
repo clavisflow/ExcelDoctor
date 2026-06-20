@@ -42,6 +42,11 @@ public sealed partial class ExcelWorkbookAnalyzer
         "cmd.exe",
         "URLDownloadToFile",
         "FileSystemObject",
+        "OpenTextFile",
+        "CreateTextFile",
+        "CopyFile",
+        "MoveFile",
+        "DeleteFile",
         "Kill "
     ];
 
@@ -54,9 +59,6 @@ public sealed partial class ExcelWorkbookAnalyzer
         "Data Source=",
         "SQL Server",
         "Oracle",
-        "SELECT ",
-        " FROM ",
-        " JOIN ",
         "Outlook.Application",
         "Word.Application",
         "XMLHTTP",
@@ -74,11 +76,10 @@ public sealed partial class ExcelWorkbookAnalyzer
         "Microsoft.Jet.OLEDB",
         "ODBC",
         "MySQL",
-        "PostgreSQL",
-        "Access"
+        "PostgreSQL"
     ];
 
-    public async Task<ExcelDiagnosticsResult> AnalyzeAsync(IBrowserFile file)
+    public async Task<ExcelDiagnosticsResult> AnalyzeAsync(IBrowserFile file, bool includeVbaDetails = false)
     {
         ValidateFile(file);
 
@@ -94,7 +95,7 @@ public sealed partial class ExcelWorkbookAnalyzer
         var structure = AnalyzeStructure(workbookPart);
         var logic = AnalyzeLogic(workbookPart);
         var operation = AnalyzeOperation(workbookPart);
-        var vba = AnalyzeVba(workbookPart);
+        var vba = AnalyzeVba(workbookPart, includeVbaDetails);
         var findings = BuildFindings(file.Size, structure, logic, operation, vba);
         var score = CalculateHealthScore(file.Size, structure, logic, operation, vba);
 
@@ -176,11 +177,11 @@ public sealed partial class ExcelWorkbookAnalyzer
             worksheets.Count(sheet => sheet.Elements<SheetProtection>().Any()));
     }
 
-    private static VbaDiagnostics AnalyzeVba(WorkbookPart workbookPart)
+    private static VbaDiagnostics AnalyzeVba(WorkbookPart workbookPart, bool includeDetails)
     {
         if (workbookPart.VbaProjectPart is null)
         {
-            return new VbaDiagnostics(false, false, 0, 0, 0, [], [], [], []);
+            return new VbaDiagnostics(false, false, false, false, 0, 0, 0, 0, 0, [], [], [], [], [], [], []);
         }
 
         using var stream = workbookPart.VbaProjectPart.GetStream(FileMode.Open, FileAccess.Read);
@@ -188,7 +189,92 @@ public sealed partial class ExcelWorkbookAnalyzer
         stream.CopyTo(memory);
         var bytes = memory.ToArray();
 
-        var searchableText = BuildSearchableBinaryText(bytes);
+        var binarySearchableText = BuildSearchableBinaryText(bytes);
+        var isPasswordProtected =
+            binarySearchableText.Contains("DPB=", StringComparison.OrdinalIgnoreCase) ||
+            binarySearchableText.Contains("GC=", StringComparison.OrdinalIgnoreCase);
+
+        if (!includeDetails)
+        {
+            return new VbaDiagnostics(true, false, isPasswordProtected, false, 0, 0, 0, 0, 0, [], [], [], [], [], [], []);
+        }
+
+        var sourceCodeParsed = false;
+        var sourceLineCount = 0;
+        var moduleDiagnostics = new List<VbaModuleDiagnostics>();
+        var searchableText = binarySearchableText;
+
+        try
+        {
+            var projectSource = VbaProjectSourceReader.Read(bytes);
+            if (projectSource.Modules.Count > 0)
+            {
+                sourceCodeParsed = true;
+                searchableText = string.Join('\n', projectSource.Modules.Select(module => module.SourceText));
+                moduleDiagnostics = projectSource.Modules
+                    .Select(module => AnalyzeVbaModule(module.Name, module.SourceText))
+                    .ToList();
+                sourceLineCount = moduleDiagnostics.Sum(module => module.LineCount);
+            }
+        }
+        catch (InvalidDataException)
+        {
+            // Keep the previous binary-trace based behavior when source extraction is not available.
+        }
+        catch (ArgumentException)
+        {
+            // Malformed OLE/VBA projects should not block the workbook-level diagnosis.
+        }
+        catch (OverflowException)
+        {
+            // Corrupt sector chains can produce invalid offsets; fall back to binary traces.
+        }
+        catch (IndexOutOfRangeException)
+        {
+            // Corrupt directory records can produce invalid offsets; fall back to binary traces.
+        }
+
+        var signals = AnalyzeVbaSignals(searchableText);
+
+        return new VbaDiagnostics(
+            true,
+            true,
+            isPasswordProtected,
+            sourceCodeParsed,
+            moduleDiagnostics.Count,
+            sourceLineCount,
+            signals.DetectedSuspicious.Count,
+            signals.DetectedDependencies.Count,
+            signals.PersonalInfoPatternCount,
+            signals.DetectedSuspicious,
+            signals.DetectedDependencies,
+            signals.DetectedObjectTargets,
+            signals.DetectedFileTargets,
+            signals.DetectedConnectionHints,
+            signals.DetectedSqlTables,
+            moduleDiagnostics);
+    }
+
+    private static VbaModuleDiagnostics AnalyzeVbaModule(string name, string sourceText)
+    {
+        var signals = AnalyzeVbaSignals(sourceText);
+
+        return new VbaModuleDiagnostics(
+            name,
+            CountSourceLines(sourceText),
+            signals.DetectedSuspicious.Count,
+            signals.DetectedDependencies.Count,
+            signals.PersonalInfoPatternCount,
+            signals.DetectedSuspicious,
+            signals.DetectedDependencies,
+            signals.DetectedObjectTargets,
+            signals.DetectedFileTargets,
+            signals.DetectedConnectionHints,
+            signals.DetectedSqlTables);
+    }
+
+    private static VbaSignals AnalyzeVbaSignals(string searchableText)
+    {
         var detectedSuspicious = SuspiciousVbaKeywords
             .Where(keyword => searchableText.Contains(keyword, StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -200,6 +286,11 @@ public sealed partial class ExcelWorkbookAnalyzer
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        if (SqlSelectStatementRegex().IsMatch(searchableText))
+        {
+            detectedDependencies.Add("SQL SELECT");
+        }
 
         var personalInfoPatternCount =
             EmailRegex().Matches(searchableText).Count +
@@ -220,20 +311,52 @@ public sealed partial class ExcelWorkbookAnalyzer
             .Take(30)
             .ToList();
 
-        var isPasswordProtected =
-            searchableText.Contains("DPB=", StringComparison.OrdinalIgnoreCase) ||
-            searchableText.Contains("GC=", StringComparison.OrdinalIgnoreCase);
+        var detectedObjectTargets = CreateObjectTargetRegex().Matches(searchableText)
+            .Select(match => match.Groups["target"].Value.Trim())
+            .Where(target => !string.IsNullOrWhiteSpace(target))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .Take(30)
+            .ToList();
 
-        return new VbaDiagnostics(
-            true,
-            isPasswordProtected,
-            detectedSuspicious.Count,
-            detectedDependencies.Count,
-            personalInfoPatternCount,
+        var detectedFileTargets = FileTargetRegex().Matches(searchableText)
+            .Select(match => match.Groups["path"].Value.Trim())
+            .Concat(FileSystemObjectTargetRegex().Matches(searchableText)
+                .Select(match => FormatFileSystemObjectTarget(match.Groups["method"].Value, match.Groups["target"].Value)))
+            .Concat(VbaOpenStatementTargetRegex().Matches(searchableText)
+                .Select(match => $"Open: {match.Groups["target"].Value.Trim()}"))
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .Take(30)
+            .ToList();
+
+        return new VbaSignals(
             detectedSuspicious,
             detectedDependencies,
+            detectedObjectTargets,
+            detectedFileTargets,
             detectedConnectionHints,
-            detectedSqlTables);
+            detectedSqlTables,
+            personalInfoPatternCount);
+    }
+
+    private static int CountSourceLines(string sourceText)
+    {
+        if (string.IsNullOrEmpty(sourceText))
+        {
+            return 0;
+        }
+
+        return sourceText.Count(character => character == '\n') + 1;
+    }
+
+    private static string FormatFileSystemObjectTarget(string method, string target)
+    {
+        var cleanTarget = target.Trim().Trim('"', '\'');
+        return string.IsNullOrWhiteSpace(cleanTarget)
+            ? string.Empty
+            : $"{method}: {cleanTarget}";
     }
 
     private static string BuildSearchableBinaryText(byte[] bytes)
@@ -317,6 +440,15 @@ public sealed partial class ExcelWorkbookAnalyzer
             findings.Add(new("セキュリティ", "Medium", "VBA マクロを含みます", "マクロの処理内容と実行タイミングを確認してください。"));
         }
 
+        if (vba.SourceCodeParsed && vba.SourceLineCount >= 1000)
+        {
+            findings.Add(new("保守性", "High", "VBA コード量が多い", "モジュール全体の行数が多く、仕様把握と改修影響の確認に時間がかかる状態です。"));
+        }
+        else if (vba.SourceCodeParsed && vba.SourceLineCount >= 300)
+        {
+            findings.Add(new("保守性", "Medium", "VBA コード量がやや多い", "主要なマクロ処理をモジュール単位で棚卸ししてください。"));
+        }
+
         if (vba.SuspiciousKeywordCount > 0)
         {
             findings.Add(new("セキュリティ", "High", "注意が必要な VBA 構文があります", "自動実行、外部プログラム実行、ファイル操作に関連する語句を検出しました。"));
@@ -368,6 +500,11 @@ public sealed partial class ExcelWorkbookAnalyzer
             actions.Add("VBA の自動実行・外部接続・ファイル操作をレビューし、処理フローを仕様書化する。");
         }
 
+        if (vba.SourceCodeParsed && vba.Modules.Count > 0)
+        {
+            actions.Add("検出語句のある VBA モジュールから優先的に確認し、DB 接続・ファイル操作・自動実行処理を分離する。");
+        }
+
         if (findings.Count == 0)
         {
             actions.Add("現時点では大きなリスクは少ないため、シート構成と主要数式の概要をドキュメント化する。");
@@ -402,6 +539,7 @@ public sealed partial class ExcelWorkbookAnalyzer
             penalty += 6;
         }
 
+        penalty += Math.Min(10, vba.SourceLineCount / 250);
         penalty += Math.Min(15, vba.SuspiciousKeywordCount * 5);
         penalty += Math.Min(12, vba.DataAccessKeywordCount * 4);
         penalty += Math.Min(10, vba.PersonalInfoPatternCount * 2);
@@ -419,6 +557,15 @@ public sealed partial class ExcelWorkbookAnalyzer
         _ => "E"
     };
 
+    private sealed record VbaSignals(
+        IReadOnlyList<string> DetectedSuspicious,
+        IReadOnlyList<string> DetectedDependencies,
+        IReadOnlyList<string> DetectedObjectTargets,
+        IReadOnlyList<string> DetectedFileTargets,
+        IReadOnlyList<string> DetectedConnectionHints,
+        IReadOnlyList<string> DetectedSqlTables,
+        int PersonalInfoPatternCount);
+
     [GeneratedRegex(@"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", RegexOptions.IgnoreCase)]
     private static partial Regex EmailRegex();
 
@@ -430,4 +577,19 @@ public sealed partial class ExcelWorkbookAnalyzer
 
     [GeneratedRegex(@"\b(?:FROM|JOIN)\s+(?<table>(?:\[?[A-Z0-9_.$#]+\]?\.){0,2}\[?[A-Z0-9_.$#]+\]?)", RegexOptions.IgnoreCase)]
     private static partial Regex SqlTableRegex();
+
+    [GeneratedRegex(@"\bSELECT\b[\s\S]{1,2000}?\bFROM\b", RegexOptions.IgnoreCase)]
+    private static partial Regex SqlSelectStatementRegex();
+
+    [GeneratedRegex(@"\b(?:CreateObject|GetObject)\s*\(\s*[""'](?<target>[^""']+)[""']", RegexOptions.IgnoreCase)]
+    private static partial Regex CreateObjectTargetRegex();
+
+    [GeneratedRegex(@"[""'](?<path>(?:[A-Z]:\\|\\\\)[^""'\r\n]+|[^""'\r\n]+\.(?:xlsx|xlsm|xls|csv|txt|xml|json|accdb|mdb|sql|bat|ps1|vbs|exe|pdf))[""']", RegexOptions.IgnoreCase)]
+    private static partial Regex FileTargetRegex();
+
+    [GeneratedRegex(@"\.\s*(?<method>OpenTextFile|CreateTextFile|GetFile|GetFolder|FileExists|FolderExists|CopyFile|CopyFolder|MoveFile|MoveFolder|DeleteFile|DeleteFolder|BuildPath)\s*\(\s*(?<target>[^,\)\r\n]+)", RegexOptions.IgnoreCase)]
+    private static partial Regex FileSystemObjectTargetRegex();
+
+    [GeneratedRegex(@"^\s*Open\s+(?<target>.+?)\s+For\s+(?:Input|Output|Append|Binary|Random)\b", RegexOptions.IgnoreCase | RegexOptions.Multiline)]
+    private static partial Regex VbaOpenStatementTargetRegex();
 }
