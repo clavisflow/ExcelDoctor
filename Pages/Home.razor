@@ -9,10 +9,10 @@
 <section class="diagnostics-shell @(result is null ? "initial" : "has-result")">
     <div class="workspace-title">
         <div>
-            <div class="product-brand">
+            <a class="product-brand" href="https://clavisflow.net/">
                 <span class="brand-mark" aria-hidden="true"><img src="clavisflow-icon.png" alt=""></span>
                 <span>ClavisFlow</span>
-            </div>
+            </a>
             <h1>Excel 健康診断</h1>
             <p class="lead-copy">
                 ファイルをドラッグ＆ドロップするだけ。危険なマクロ、増殖した数式、隠されたシート、依存しているデータベースをブラウザ上で瞬時に解析。機密性を保ったまま、あなたのExcelの「カオス度」を可視化します。
@@ -272,6 +272,10 @@
             }
         </section>
     }
+
+    <footer class="site-footer">
+        Built with C#, Blazor WebAssembly and Azure Static Web Apps.
+    </footer>
 </section>
 
 @code {
