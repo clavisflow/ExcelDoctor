@@ -5,6 +5,11 @@ namespace ExcelDoctor.Services;
 
 internal static class VbaProjectSourceReader
 {
+    static VbaProjectSourceReader()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
+
     public static VbaProjectSource Read(byte[] vbaProjectBytes)
     {
         var compoundFile = OleCompoundFile.Open(vbaProjectBytes);
@@ -15,7 +20,7 @@ internal static class VbaProjectSourceReader
 
         var dirBytes = DecompressVbaContainer(compressedDir);
         var codePage = TryReadCodePage(dirBytes);
-        var modules = ReadModuleDirectory(dirBytes)
+        var modules = ReadModuleDirectory(dirBytes, codePage)
             .Select(module => ReadModuleSource(compoundFile, module, codePage))
             .Where(module => module is not null)
             .Cast<VbaModuleSource>()
@@ -47,7 +52,7 @@ internal static class VbaProjectSourceReader
             sourceText);
     }
 
-    private static IReadOnlyList<ModuleDirectoryEntry> ReadModuleDirectory(byte[] dirBytes)
+    private static IReadOnlyList<ModuleDirectoryEntry> ReadModuleDirectory(byte[] dirBytes, int? codePage)
     {
         var projectModulesOffset = FindProjectModulesOffset(dirBytes);
         if (projectModulesOffset < 0)
@@ -80,10 +85,16 @@ internal static class VbaProjectSourceReader
                 switch (recordId)
                 {
                     case 0x0019:
-                        moduleName = DecodeDirectoryString(recordBytes);
+                        moduleName = DecodeText(recordBytes, codePage);
                         break;
                     case 0x001A:
-                        streamName = DecodeDirectoryString(recordBytes);
+                        streamName = DecodeText(recordBytes, codePage);
+                        break;
+                    case 0x0047:
+                        moduleName = DecodeText(recordBytes, 1200);
+                        break;
+                    case 0x0032:
+                        streamName = DecodeText(recordBytes, 1200);
                         break;
                     case 0x0031 when recordBytes.Length >= 4:
                         textOffset = BinaryPrimitives.ReadInt32LittleEndian(recordBytes[..4]);
@@ -141,31 +152,26 @@ internal static class VbaProjectSourceReader
         return null;
     }
 
-    private static string DecodeDirectoryString(ReadOnlySpan<byte> bytes)
+    private static string DecodeSource(byte[] bytes, int? codePage)
     {
-        return Encoding.Latin1.GetString(bytes).TrimEnd('\0');
+        return DecodeText(bytes, codePage);
     }
 
-    private static string DecodeSource(byte[] bytes, int? codePage)
+    private static string DecodeText(ReadOnlySpan<byte> bytes, int? codePage)
     {
         try
         {
-            if (codePage == 65001)
+            if (codePage is not null)
             {
-                return Encoding.UTF8.GetString(bytes);
-            }
-
-            if (codePage == 1200)
-            {
-                return Encoding.Unicode.GetString(bytes);
+                return Encoding.GetEncoding(codePage.Value).GetString(bytes).TrimEnd('\0');
             }
         }
-        catch (DecoderFallbackException)
+        catch (ArgumentException)
         {
-            // Latin1 preserves ASCII keywords even when the project uses a legacy code page.
+            // Unknown project code pages are uncommon; preserve the existing ASCII-search behavior.
         }
 
-        return Encoding.Latin1.GetString(bytes);
+        return Encoding.Latin1.GetString(bytes).TrimEnd('\0');
     }
 
     private static byte[] DecompressVbaContainer(byte[] compressedContainer)
