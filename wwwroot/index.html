@@ -21,11 +21,35 @@
 
 <body>
     <div id="app">
-        <svg class="loading-progress">
-            <circle r="40%" cx="50%" cy="50%" />
-            <circle r="40%" cx="50%" cy="50%" />
-        </svg>
-        <div class="loading-progress-text"></div>
+        <main class="diagnostics-shell initial seo-fallback">
+            <div class="workspace-title">
+                <div>
+                    <a class="product-brand" href="https://clavisflow.net/">
+                        <span class="brand-mark" aria-hidden="true"><img src="clavisflow-icon.png" alt=""></span>
+                        <span>ClavisFlow</span>
+                    </a>
+                    <h1>EXCEL健康診断アプリ「エクセルドクター」</h1>
+                    <p class="lead-copy">
+                        危険なVBAマクロ、増殖した数式、隠されたシート、依存しているデータベースをブラウザ上で瞬時に解析。
+                        機密性を保ったまま、Excelのカオス度を可視化します。
+                    </p>
+                </div>
+            </div>
+
+            <section class="seo-panel">
+                <h2>Excelファイルのリスクと複雑さをブラウザだけで診断</h2>
+                <p>
+                    エクセルドクターは、.xlsx / .xlsm ファイルを読み込み、シート構造、数式、外部リンク、
+                    VBAマクロの痕跡、隠しシートなどを解析するExcel健康診断ツールです。
+                </p>
+                <ul>
+                    <li>Excelの健康スコア、リスク分類、改善ポイントを確認できます。</li>
+                    <li>ファイルはサーバーへ送信せず、ブラウザ内で解析します。</li>
+                    <li>診断結果はHTMLレポートとして出力できます。</li>
+                </ul>
+                <p class="seo-app-note">通常のブラウザでは、この後に診断アプリ本体が読み込まれます。</p>
+            </section>
+        </main>
     </div>
 
     <div id="blazor-error-ui">
@@ -33,8 +57,50 @@
         <a href="." class="reload">Reload</a>
         <span class="dismiss">x</span>
     </div>
-    <script src="report.js"></script>
-    <script src="_framework/blazor.webassembly#[.{fingerprint}].js"></script>
+    <script>
+        (() => {
+            const search = new URLSearchParams(window.location.search);
+            const userAgent = navigator.userAgent || "";
+            const botPattern = /bot|crawler|spider|crawling|googlebot|bingbot|slurp|duckduckbot|baiduspider|yandex|facebookexternalhit|twitterbot|linkedinbot|discordbot|slackbot|linebot/i;
+            const forceBot = search.get("bot") === "1";
+            const forceApp = search.get("app") === "1";
+
+            if (!forceApp && (forceBot || botPattern.test(userAgent))) {
+                document.documentElement.dataset.renderMode = "bot-static";
+                return;
+            }
+
+            document.documentElement.dataset.renderMode = "blazor";
+            document.getElementById("app").innerHTML = `
+                <svg class="loading-progress">
+                    <circle r="40%" cx="50%" cy="50%" />
+                    <circle r="40%" cx="50%" cy="50%" />
+                </svg>
+                <div class="loading-progress-text"></div>`;
+
+            const scripts = [
+                "report.js",
+                "_framework/blazor.webassembly.js"
+            ];
+
+            const loadScript = src => new Promise((resolve, reject) => {
+                const script = document.createElement("script");
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = () => reject(new Error(`Failed to load ${src}`));
+                document.body.appendChild(script);
+            });
+
+            scripts.reduce((chain, src) => chain.then(() => loadScript(src)), Promise.resolve())
+                .catch(error => {
+                    console.error(error);
+                    const errorUi = document.getElementById("blazor-error-ui");
+                    if (errorUi) {
+                        errorUi.style.display = "block";
+                    }
+                });
+        })();
+    </script>
 </body>
 
 </html>
